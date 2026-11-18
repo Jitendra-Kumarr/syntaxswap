@@ -1,0 +1,72 @@
+{
+  "name": "syntaxswap",
+  "displayName": "SyntaxSwap",
+  "description": "Convert code between programming languages using AI",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.96.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "syntaxswap.convert",
+        "title": "SyntaxSwap: Convert Code"
+      },
+      {
+        "command": "syntaxswap.setApiKey",
+        "title": "SyntaxSwap: Set Gemini API Key"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "syntaxswap.convert",
+          "when": "editorTextFocus",
+          "group": "navigation"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "SyntaxSwap",
+      "properties": {
+        "syntaxswap.model": {
+          "type": "string",
+          "default": "gemini-flash-lite-latest",
+          "description": "Gemini model used for conversion. Change this if Google retires the model."
+        },
+        "syntaxswap.timeoutSeconds": {
+          "type": "number",
+          "default": 30,
+          "description": "Seconds to wait for each API request before giving up."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile && npm run lint",
+    "lint": "eslint src",
+    "test": "vscode-test"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.96.0",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "24.x",
+    "typescript-eslint": "^8.61.1",
+    "eslint": "^10.5.0",
+    "typescript": "^6.0.3",
+    "@vscode/test-cli": "^0.0.15",
+    "@vscode/test-electron": "^3.0.0"
+  },
+  "overrides": {
+    "diff": "^8.0.4",
+    "serialize-javascript": "^7.0.6"
+  }
+}
