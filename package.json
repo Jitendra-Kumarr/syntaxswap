@@ -43,6 +43,11 @@
           "type": "number",
           "default": 30,
           "description": "Seconds to wait for each API request before giving up."
+        },
+        "syntaxswap.validate": {
+          "type": "boolean",
+          "default": true,
+          "description": "Check the converted code with the language's compiler or interpreter (if installed)."
         }
       }
     }

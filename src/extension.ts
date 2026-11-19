@@ -3,39 +3,46 @@ import * as path from 'path';
 import { Language, LANGUAGES, findByVsCodeId } from './languages';
 import { buildPrompt, cleanResponse } from './prompt';
 import { callGemini } from './gemini';
+import { CheckResult, validateCode } from './validate';
 
-// A quick-pick row that also carries the Language it stands for.
 type LanguageItem = vscode.QuickPickItem & { lang: Language };
 
 function toItems(langs: Language[]): LanguageItem[] {
     return langs.map(lang => ({ label: lang.name, lang }));
 }
 
-// After a conversion, ask what to do with the result.
+// After a conversion, report the syntax check and ask what to do with the result.
 async function offerActions(
     editor: vscode.TextEditor,
     range: vscode.Range,
     wholeFile: boolean,
     result: string,
-    target: Language
+    target: Language,
+    check: CheckResult
 ): Promise<void> {
     const REPLACE = 'Replace original';
     const COPY = 'Copy';
     const SAVE = 'Save as file';
 
-    // Shows a message with buttons. Returns the clicked button's text, or undefined if dismissed.
-    const choice = await vscode.window.showInformationMessage(
-        `SyntaxSwap: converted to ${target.name}.`,
-        REPLACE, COPY, SAVE
-    );
+    let choice: string | undefined;
+    if (check.status === 'errors') {
+        choice = await vscode.window.showWarningMessage(
+            `SyntaxSwap: converted to ${target.name}, but the syntax check found errors (see the SyntaxSwap output).`,
+            REPLACE, COPY, SAVE
+        );
+    } else {
+        const note = check.status === 'ok'
+            ? 'Syntax check passed.'
+            : `Syntax check skipped (${check.reason}).`;
+        choice = await vscode.window.showInformationMessage(
+            `SyntaxSwap: converted to ${target.name}. ${note}`,
+            REPLACE, COPY, SAVE
+        );
+    }
 
     if (choice === REPLACE) {
-        // Bring the original editor back, then swap the text in the saved range.
         const original = await vscode.window.showTextDocument(editor.document, editor.viewColumn);
         await original.edit(builder => builder.replace(range, result));
-
-        // If the whole file was replaced, switch its language so the old
-        // language's error checker stops flagging the new code.
         if (wholeFile) {
             await vscode.languages.setTextDocumentLanguage(original.document, target.id);
         }
@@ -43,14 +50,13 @@ async function offerActions(
         await vscode.env.clipboard.writeText(result);
         vscode.window.showInformationMessage('SyntaxSwap: copied to clipboard.');
     } else if (choice === SAVE) {
-        // Suggest a name next to the original: test.java -> test.py
         let defaultUri: vscode.Uri | undefined;
         if (editor.document.uri.scheme === 'file') {
             const parsed = path.parse(editor.document.uri.fsPath);
             defaultUri = vscode.Uri.file(path.join(parsed.dir, parsed.name + target.ext));
         }
         const uri = await vscode.window.showSaveDialog({ defaultUri });
-        if (!uri) { return; } // user cancelled
+        if (!uri) { return; }
 
         await vscode.workspace.fs.writeFile(uri, new TextEncoder().encode(result));
         const saved = await vscode.workspace.openTextDocument(uri);
@@ -61,7 +67,6 @@ async function offerActions(
 export function activate(context: vscode.ExtensionContext) {
     const log = vscode.window.createOutputChannel('SyntaxSwap');
 
-    // Command 1: save the Gemini API key securely
     const setKey = vscode.commands.registerCommand('syntaxswap.setApiKey', async () => {
         const key = await vscode.window.showInputBox({
             prompt: 'Enter your Gemini API key',
@@ -74,7 +79,6 @@ export function activate(context: vscode.ExtensionContext) {
         }
     });
 
-    // Command 2: convert code
     const convert = vscode.commands.registerCommand('syntaxswap.convert', async () => {
         const editor = vscode.window.activeTextEditor;
         if (!editor) {
@@ -82,7 +86,7 @@ export function activate(context: vscode.ExtensionContext) {
             return;
         }
 
-        // 1. The range to convert: the selection, or the whole file if nothing is selected.
+        // 1. The range to convert: the selection, or the whole file.
         const doc = editor.document;
         const wholeFile = editor.selection.isEmpty;
         const range: vscode.Range = wholeFile
@@ -95,7 +99,7 @@ export function activate(context: vscode.ExtensionContext) {
             return;
         }
 
-        // 2. Detect the source language, or ask if it is not in our list
+        // 2. Source language
         let source = findByVsCodeId(doc.languageId);
         if (!source) {
             const pickedSource = await vscode.window.showQuickPick(toItems(LANGUAGES), {
@@ -106,7 +110,7 @@ export function activate(context: vscode.ExtensionContext) {
         }
         const from = source;
 
-        // 3. Pick the target language (everything except the source)
+        // 3. Target language
         const pickedTarget = await vscode.window.showQuickPick(
             toItems(LANGUAGES.filter(l => l.id !== from.id)),
             { placeHolder: `Convert ${from.name} to which language?` }
@@ -125,20 +129,23 @@ export function activate(context: vscode.ExtensionContext) {
         const config = vscode.workspace.getConfiguration('syntaxswap');
         const model = config.get<string>('model', 'gemini-flash-lite-latest').trim();
         const timeoutSeconds = config.get<number>('timeoutSeconds', 30);
+        const validate = config.get<boolean>('validate', true);
 
         log.show(true);
         log.appendLine(`--- ${from.name} to ${target.name} ---`);
+        log.appendLine(wholeFile
+            ? `Input: whole file (${code.length} characters)`
+            : `Input: selection (${code.length} characters)`);
 
-        // 6. Convert with a progress notification.
-        // The callback returns the converted text, or undefined if it failed.
-        const result = await vscode.window.withProgress<string | undefined>(
+        // 6. Convert, then validate, under one progress notification.
+        const outcome = await vscode.window.withProgress<{ text: string; check: CheckResult } | undefined>(
             {
                 location: vscode.ProgressLocation.Notification,
                 title: `SyntaxSwap: converting ${from.name} to ${target.name}...`
             },
-            async () => {
+            async progress => {
                 try {
-                    const prompt = buildPrompt(code, from.name, target.name);
+                    const prompt = buildPrompt(code, from.name, target.name, !wholeFile);
                     const raw = await callGemini(
                         prompt,
                         { apiKey, model, timeoutMs: timeoutSeconds * 1000, maxAttempts: 3 },
@@ -149,9 +156,29 @@ export function activate(context: vscode.ExtensionContext) {
                     if (cleaned === '') {
                         throw new Error('The model returned an empty response. Try again.');
                     }
+                    log.appendLine('Conversion done.');
 
-                    log.appendLine('Done.');
-                    return cleaned;
+                    // A selected fragment is not a complete program, so only whole files are checked.
+                    let check: CheckResult = {
+                        status: 'skipped',
+                        reason: !validate ? 'validation is turned off' : 'a selection is only a fragment'
+                    };
+                    if (validate && wholeFile) {
+                        progress.report({ message: 'checking syntax...' });
+                        check = await validateCode(cleaned, target);
+                        if (check.status === 'ok') {
+                            log.appendLine('Syntax check: passed.');
+                        } else if (check.status === 'skipped') {
+                            log.appendLine(`Syntax check: skipped (${check.reason}).`);
+                        } else {
+                            log.appendLine('Syntax check: ERRORS found:');
+                            log.appendLine(check.details);
+                        }
+                    } else {
+                        log.appendLine(`Syntax check: skipped (${check.reason}).`);
+                    }
+
+                    return { text: cleaned, check };
                 } catch (err: any) {
                     log.appendLine('FAILED: ' + err.message);
                     vscode.window.showErrorMessage('SyntaxSwap: conversion failed. ' + err.message);
@@ -160,16 +187,16 @@ export function activate(context: vscode.ExtensionContext) {
             }
         );
 
-        if (result === undefined) { return; }
+        if (outcome === undefined) { return; }
 
         // 7. Show the result beside the original, then offer the actions.
         const resultDoc = await vscode.workspace.openTextDocument({
-            content: result,
+            content: outcome.text,
             language: target.id
         });
         await vscode.window.showTextDocument(resultDoc, vscode.ViewColumn.Beside);
 
-        await offerActions(editor, range, wholeFile, result, target);
+        await offerActions(editor, range, wholeFile, outcome.text, target, outcome.check);
     });
 
     context.subscriptions.push(setKey, convert, log);
