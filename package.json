@@ -1,12 +1,26 @@
 {
   "name": "syntaxswap",
   "displayName": "SyntaxSwap",
-  "description": "Convert code between programming languages using AI",
-  "version": "0.0.1",
+  "description": "Convert code between programming languages using AI, with a real syntax check on the result.",
+  "version": "0.1.0",
+  "publisher": "jitendra-kumarr",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Jitendra-Kumarr/syntaxswap.git"
+  },
+  "keywords": [
+    "code converter",
+    "translate code",
+    "java to python",
+    "gemini",
+    "ai"
+  ],
   "engines": {
     "vscode": "^1.96.0"
   },
   "categories": [
+    "Programming Languages",
     "Other"
   ],
   "activationEvents": [],
