@@ -3,7 +3,7 @@
   "displayName": "SyntaxSwap",
   "description": "Convert code between programming languages using AI, with a real syntax check on the result.",
   "version": "0.1.0",
-  "publisher": "jitendra-kumarr",
+  "publisher": "jitendra-kumar",
   "license": "MIT",
   "repository": {
     "type": "git",
